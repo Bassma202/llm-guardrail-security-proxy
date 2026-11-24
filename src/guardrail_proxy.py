@@ -14,8 +14,8 @@ class LLMGuardrailProxy:
     def __init__(self):
         # Known prompt injection heuristics and jailbreak patterns
         self.jailbreak_patterns = [
-            r"ignore\s+(all\s+)?(previous|prior|above)\s+instructions",
-            r"disregard\s+(all\s+)?(previous|prior)\s+rules",
+            r"ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|guidelines|rules)",
+            r"disregard\s+(all\s+)?(previous|prior|above)\s+(rules|guidelines|instructions)",
             r"you\s+are\s+now\s+in\s+DAN\s+mode",
             r"do\s+anything\s+now",
             r"reveal\s+(your\s+)?system\s+prompt",

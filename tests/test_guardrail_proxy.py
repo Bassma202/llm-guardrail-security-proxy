@@ -1,5 +1,5 @@
 """
-Unit Tests for AI Security Guardrail Proxy & RAG Auditor
+Unit Tests for AI Security Guardrail Proxy, RAG Auditor, and MCP Sandbox Guard
 """
 
 import unittest
@@ -10,11 +10,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from src.guardrail_proxy import LLMGuardrailProxy
 from src.rag_security_auditor import RAGSecurityAuditor
+from src.mcp_security_guard import MCPSecurityGuard
 
 class TestAIProtection(unittest.TestCase):
     def setUp(self):
         self.proxy = LLMGuardrailProxy()
         self.rag_auditor = RAGSecurityAuditor()
+        self.mcp_guard = MCPSecurityGuard(sandbox_root="/var/sandbox/data")
 
     def test_benign_prompt_passes(self):
         prompt = "Explain how AES-256 encryption works in operating systems."
@@ -57,6 +59,16 @@ class TestAIProtection(unittest.TestCase):
         audit = self.rag_auditor.audit_document(untrusted_resume, "resume.pdf")
         self.assertFalse(audit["is_safe"])
         self.assertEqual(audit["recommendation"], "QUARANTINE_DOCUMENT")
+
+    def test_mcp_directory_traversal_blocked(self):
+        allowed, reason = self.mcp_guard.validate_tool_call("read_file", {"path": "../../etc/passwd"})
+        self.assertFalse(allowed)
+        self.assertIn("PATH_TRAVERSAL_BLOCKED", reason)
+
+    def test_mcp_dangerous_command_blocked(self):
+        allowed, reason = self.mcp_guard.validate_tool_call("run_bash", {"command": "rm -rf / --no-preserve-root"})
+        self.assertFalse(allowed)
+        self.assertIn("POLICY_VIOLATION", reason)
 
 if __name__ == "__main__":
     unittest.main()
