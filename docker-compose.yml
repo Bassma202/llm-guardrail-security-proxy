@@ -1,0 +1,12 @@
+# ALETHEIA Local Open-Weight LLM Stack (Ollama ARM64/AMD64)
+services:
+  ollama:
+    image: ollama/ollama:0.5.7
+    container_name: aletheia_ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - aletheia_ollama_models:/root/.ollama
+
+volumes:
+  aletheia_ollama_models:
