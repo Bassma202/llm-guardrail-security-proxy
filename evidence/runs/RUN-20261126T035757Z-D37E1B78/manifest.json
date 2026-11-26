@@ -1,0 +1,15 @@
+{
+  "run_id": "RUN-20261126T035757Z-D37E1B78",
+  "generated_at": "2026-11-26T03:57:57.628058+00:00",
+  "git_commit": "5680e27",
+  "run_classification": "genuine_live_inference",
+  "dataset": {
+    "dataset_name": "aletheia_frozen_held_out",
+    "dataset_version": "1.0.0",
+    "dataset_sha256": "fdbd0f86eb39ea66f8886cf589d34227314a89cc1af7190df600eebd9acbc10e",
+    "split": "frozen_held_out",
+    "case_count": 40
+  },
+  "model_requested": "smollm2:360m",
+  "immutable": true
+}

@@ -1,0 +1,25 @@
+{
+  "version": "1.0.0",
+  "split_independence": {
+    "independent": true,
+    "threshold": 0.75,
+    "overlaps": []
+  },
+  "splits": {
+    "dev": {
+      "file": "dev_v1.json",
+      "sha256": "3579e5c7d53dca4c456d62e6fe600209e813b253f60a9c57ace455542a27ce69",
+      "cases": 4
+    },
+    "validation": {
+      "file": "validation_v1.json",
+      "sha256": "9a178c892aa730a723d1e15721ea5469009c1782d7e8795197065af946eb8384",
+      "cases": 4
+    },
+    "frozen_held_out": {
+      "file": "frozen_held_out_v1.json",
+      "sha256": "fdbd0f86eb39ea66f8886cf589d34227314a89cc1af7190df600eebd9acbc10e",
+      "cases": 40
+    }
+  }
+}

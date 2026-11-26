@@ -1,4 +1,11 @@
-"""ALETHEIA Scientific Evaluation Web Interface (Midnight Navy / Ivory / Brass palette)."""
+"""ALETHEIA Protected Application API & Scientific Evaluation UI (Remediated ALETHEIA-01).
+
+Strict architectural boundary:
+- Protected endpoints (`/api/protected/query`, `/api/protected/mcp/call`) require verified Bearer
+  authentication and derive caller role and tenant strictly server-side. Caller-supplied security
+  flags (role, tenant, ACL toggle) are NOT accepted and cannot weaken policy enforcement.
+- Research benchmark readouts (`/api/benchmark`) are read-only against immutable run artifacts.
+"""
 
 from __future__ import annotations
 
@@ -6,47 +13,78 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from aletheia.evaluator import run_comparative_benchmark
+from aletheia.auth import AletheiaAuthError, AletheiaAuthService, AletheiaPrincipal
 from aletheia.guardrails import OWASP_LLM_2025_CONTROLS, LayeredGuardrail
 from aletheia.llm_client import LocalLLMClient
 from aletheia.mcp_server import MCPAuthorizationGuard
 from aletheia.rag import SecureRAGPipeline
 
 
-class PromptEvalRequest(BaseModel):
+class ProtectedQueryRequest(BaseModel):
+    """Strict protected request schema: forbids extra caller-supplied security overrides (ALETHEIA-01)."""
+
+    model_config = ConfigDict(extra="forbid")
     prompt: str = Field(..., min_length=1, max_length=4000)
-    caller_role: str = Field(default="GUEST")
-    tenant_id: str | None = Field(default="observatoire-meridien")
     use_rag: bool = Field(default=True)
-    enforce_pre_retrieval_acl: bool = Field(default=True)
 
 
-class MCPCallRequest(BaseModel):
+class ProtectedMCPCallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
-    caller_role: str = Field(default="RESEARCHER")
 
 
-def create_app(sandbox_root: Path | None = None, evidence_path: Path | None = None) -> FastAPI:
-    app = FastAPI(title="ALETHEIA — LLM, RAG & Agent Security Evaluation Framework", version="2.0.0")
+def _load_latest_benchmark(runs_dir: Path, fallback_legacy: Path) -> dict[str, Any] | None:
+    idx_path = runs_dir / "runs_index.json"
+    if idx_path.exists():
+        idx = json.loads(idx_path.read_text(encoding="utf-8"))
+        live_id = idx.get("latest_verified_live_run_id")
+        if live_id and (runs_dir / live_id / "summary.json").exists():
+            return json.loads((runs_dir / live_id / "summary.json").read_text(encoding="utf-8"))
+        if idx.get("runs"):
+            last_id = idx["runs"][-1]["run_id"]
+            if (runs_dir / last_id / "summary.json").exists():
+                return json.loads((runs_dir / last_id / "summary.json").read_text(encoding="utf-8"))
+    if fallback_legacy.exists():
+        return json.loads(fallback_legacy.read_text(encoding="utf-8"))
+    return None
+
+
+def create_app(
+    sandbox_root: Path | None = None,
+    runs_dir: Path | None = None,
+    auth_service: AletheiaAuthService | None = None,
+) -> FastAPI:
+    app = FastAPI(title="ALETHEIA — LLM, RAG & Agent Security Evaluation Framework", version="2.1.0")
     root = Path(__file__).resolve().parents[2]
     sb = sandbox_root or (root / "data" / "mcp_sandbox")
-    ev_path = evidence_path or (root / "evidence" / "aletheia_benchmark_results.json")
+    r_dir = runs_dir or (root / "evidence" / "runs")
+    legacy_ev = root / "evidence" / "aletheia_benchmark_results.json"
 
+    auth = auth_service or AletheiaAuthService()
     guard = LayeredGuardrail()
     rag = SecureRAGPipeline(quarantine_poisoned=True)
     mcp = MCPAuthorizationGuard(sb)
     llm = LocalLLMClient(allow_fallback_stub=True)
+
+    app.state.auth = auth
+
+    def require_principal(authorization: str | None = Header(default=None)) -> AletheiaPrincipal:
+        try:
+            return auth.verify_bearer(authorization)
+        except AletheiaAuthError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
             "status": "ok",
             "service": "aletheia",
+            "version": "2.1.0",
             "ollama_live_available": llm.is_ollama_available(),
             "model": llm.model,
         }
@@ -57,12 +95,17 @@ def create_app(sandbox_root: Path | None = None, evidence_path: Path | None = No
 
     @app.get("/api/benchmark")
     def get_benchmark() -> dict[str, Any]:
-        if ev_path.exists():
-            return json.loads(ev_path.read_text(encoding="utf-8"))
-        return run_comparative_benchmark(sb, llm_client=llm, force_live=False)
+        data = _load_latest_benchmark(r_dir, legacy_ev)
+        if not data:
+            raise HTTPException(status_code=404, detail="No benchmark run artifacts available yet.")
+        return data
 
-    @app.post("/api/evaluate-prompt")
-    def evaluate_prompt(req: PromptEvalRequest) -> dict[str, Any]:
+    @app.post("/api/protected/query")
+    def protected_query(
+        req: ProtectedQueryRequest,
+        principal: AletheiaPrincipal = Depends(require_principal),
+    ) -> dict[str, Any]:
+        """Protected RAG+LLM endpoint deriving role and tenant strictly server-side with mandatory ACL & guardrails."""
         ingress = guard.inspect_ingress(req.prompt)
         if not ingress.allowed:
             return {
@@ -75,9 +118,9 @@ def create_app(sandbox_root: Path | None = None, evidence_path: Path | None = No
         chunks = (
             rag.retrieve(
                 ingress.sanitized_text,
-                caller_role=req.caller_role,
-                tenant_id=req.tenant_id,
-                enforce_pre_retrieval_acl=req.enforce_pre_retrieval_acl,
+                caller_role=principal.role,
+                tenant_id=principal.tenant_id,
+                enforce_pre_retrieval_acl=True,
             )
             if req.use_rag
             else []
@@ -88,6 +131,9 @@ def create_app(sandbox_root: Path | None = None, evidence_path: Path | None = No
         return {
             "allowed": egress.allowed,
             "stage": "COMPLETE",
+            "subject": principal.subject,
+            "role": principal.role,
+            "tenant_id": principal.tenant_id,
             "backend_mode": resp.backend_mode,
             "model": resp.model,
             "inference_ms": resp.inference_ms,
@@ -99,11 +145,19 @@ def create_app(sandbox_root: Path | None = None, evidence_path: Path | None = No
             "egress_signals": egress.signals,
         }
 
-    @app.post("/api/mcp/call")
-    def call_mcp(req: MCPCallRequest) -> dict[str, Any]:
-        res = mcp.validate_and_execute(req.tool_name, req.arguments, caller_role=req.caller_role, enforce_guard=True)
+    @app.post("/api/protected/mcp/call")
+    def protected_mcp_call(
+        req: ProtectedMCPCallRequest,
+        principal: AletheiaPrincipal = Depends(require_principal),
+    ) -> dict[str, Any]:
+        """Protected MCP tool endpoint deriving caller role strictly server-side with mandatory tool authorization guard."""
+        res = mcp.validate_and_execute(req.tool_name, req.arguments, caller_role=principal.role, enforce_guard=True)
+        if not res.allowed:
+            raise HTTPException(status_code=403, detail={"reason": res.reason, "owasp_ref": res.owasp_ref})
         return {
-            "allowed": res.allowed,
+            "allowed": True,
+            "subject": principal.subject,
+            "role": principal.role,
             "tool_name": res.tool_name,
             "reason": res.reason,
             "output": res.output,
@@ -112,63 +166,56 @@ def create_app(sandbox_root: Path | None = None, evidence_path: Path | None = No
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> str:
-        bench = json.loads(ev_path.read_text(encoding="utf-8")) if ev_path.exists() else run_comparative_benchmark(sb, llm_client=llm)
+        bench = _load_latest_benchmark(r_dir, legacy_ev)
+        if not bench or "architectures" not in bench:
+            return "<h1>ALETHEIA — Run benchmark to populate scientific dashboard.</h1>"
         rows = ""
         for _, r in bench["architectures"].items():
             m = r["metrics"]
             lat = r["latency_ms"]
+            pvr = m.get("actual_policy_violation_rate_pct", m.get("attack_success_rate_pct", 0.0))
+            gbr = m.get("guardrail_bypass_rate_pct", 0.0)
+            fpr = m.get("false_refusal_rate_pct", m.get("false_positive_rate_pct", 0.0))
             rows += (
                 f"<tr><td><strong>{r['label']}</strong></td>"
-                f"<td>{m['attack_success_rate_pct']}%</td>"
-                f"<td>{m['detection_recall_pct']}%</td>"
-                f"<td>{m['false_positive_rate_pct']}%</td>"
-                f"<td>{lat['guardrail_p50_ms']} ms</td>"
-                f"<td>{lat['inference_p50_ms']} ms</td>"
-                f"<td>{len(r['failures'])}</td></tr>"
+                f"<td>{pvr}%</td><td>{gbr}%</td><td>{fpr}%</td>"
+                f"<td>{lat['guardrail_p50_ms']} ms</td><td>{lat['inference_p50_ms']} ms</td></tr>"
             )
+        cls_label = bench.get("run_classification", bench.get("evidence_classification", "unknown"))
         return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ALETHEIA — LLM, RAG &amp; Agent Security Evaluation</title>
 <style>
-  body {{ margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#FAF9F6; color:#0F172A; }}
+  body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#FAF9F6; color:#0F172A; }}
   header {{ background:#0F172A; color:#FAF9F6; padding:24px 36px; border-bottom:3px solid #B48A3E; }}
   header h1 {{ margin:0; font-size:22px; letter-spacing:0.06em; }}
   header p {{ margin:6px 0 0; color:#94A3B8; font-size:13px; }}
   main {{ max-width:1120px; margin:28px auto; padding:0 24px; }}
   .card {{ background:#FFFFFF; border:1px solid #E2E8F0; border-radius:6px; padding:20px 24px; margin-bottom:20px; }}
-  .badge {{ display:inline-block; font-size:11px; padding:3px 8px; border-radius:4px; background:#0F172A; color:#E2C785; letter-spacing:0.04em; }}
   table {{ width:100%; border-collapse:collapse; margin-top:12px; font-size:14px; }}
   th, td {{ text-align:left; padding:10px 12px; border-bottom:1px solid #E2E8F0; }}
   th {{ background:#F8FAFC; color:#475569; font-weight:600; font-size:12px; text-transform:uppercase; }}
-  .note {{ font-size:13px; color:#475569; border-left:3px solid #B48A3E; padding-left:12px; margin-top:12px; }}
 </style>
 </head>
 <body>
 <header>
   <h1>ALETHEIA — LLM, RAG &amp; Agent Security Evaluation Framework</h1>
-  <p>Evidence Classification: {bench['evidence_classification']} | Held-Out Suite: {bench['benchmark_cases']} cases ({bench['attack_cases']} attacks, {bench['benign_cases']} benign)</p>
+  <p>Run ID: {bench.get('run_id', 'legacy')} | Classification: {cls_label} | Protected API requires Bearer auth</p>
 </header>
 <main>
   <section class="card">
-    <span class="badge">4-ARCHITECTURE COMPARATIVE ABLATION</span>
-    <h2>Security Efficacy &amp; Separated Latency Decomposition</h2>
+    <h2>4-Architecture Comparative Ablation (Policy Violations vs. Guardrail Bypasses)</h2>
     <table>
       <thead>
         <tr>
-          <th>Architecture</th><th>Attack Success Rate (ASR)</th><th>Detection Recall</th>
-          <th>False Positive Rate</th><th>Guardrail p50</th><th>Inference p50</th><th>Residual Failures</th>
+          <th>Architecture</th><th>Actual Policy Violation Rate</th><th>Guardrail Bypass Rate</th>
+          <th>False Refusal Rate</th><th>Guardrail p50</th><th>Inference p50</th>
         </tr>
       </thead>
       <tbody>{rows}</tbody>
     </table>
-    <p class="note">
-      <strong>Engineering finding:</strong> Regex-only ingress filters fail on zero-width Unicode obfuscation, Base64 payloads,
-      indirect RAG poisoning, cross-role RAG queries, and MCP confused-deputy calls. Even full ALETHEIA documents its residual
-      limitation on polite semantic extraction paraphrases (ATK-SEM-01), where system integrity relies on egress canary blocking
-      and independent pre-retrieval ACLs rather than lexical prompt classification alone.
-    </p>
   </section>
 </main>
 </body>

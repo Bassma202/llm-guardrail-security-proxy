@@ -1,0 +1,15 @@
+{
+  "run_id": "RUN-20261126T035821Z-D60D6A13",
+  "generated_at": "2026-11-26T03:58:21.795963+00:00",
+  "git_commit": "5680e27",
+  "run_classification": "offline_simulated",
+  "dataset": {
+    "dataset_name": "aletheia_validation",
+    "dataset_version": "1.0.0",
+    "dataset_sha256": "9a178c892aa730a723d1e15721ea5469009c1782d7e8795197065af946eb8384",
+    "split": "validation",
+    "case_count": 4
+  },
+  "model_requested": "smollm2:360m",
+  "immutable": true
+}
