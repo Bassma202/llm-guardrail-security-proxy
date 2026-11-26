@@ -5,9 +5,9 @@ To what extent do lexical ingress guardrails alone reduce actual security policy
 
 ## 2. Experimental Methodology & Anti-Contamination Design
 - **Split Separation (`src/aletheia/datasets.py`):**
-  - `data/datasets/dev_v1.json` (`12` cases): rule authoring and development diagnostics.
-  - `data/datasets/validation_v1.json` (`4` cases): CI sanity and offline harness verification.
-  - `data/datasets/frozen_held_out_v1.json` (`40` cases: `24` attacks across direct/obfuscated/semantic prompt injection, indirect RAG poisoning, unauthorized RAG ACL queries, PII/secret exfiltration, and MCP shell/path traversal + `16` benign & hard-benign cases; SHA-256 `fdbd0f86eb39ea66f8886cf589d34227314a89cc1af7190df600eebd9acbc10e`, verified `0` prompt/ID overlap with dev/validation).
+  - `datasets/dev_v1.json` (`12` cases): rule authoring and development diagnostics.
+  - `datasets/validation_v1.json` (`4` cases): CI sanity and offline harness verification.
+  - `datasets/frozen_held_out_v1.json` (`40` cases: `24` attacks across direct/obfuscated/semantic prompt injection, indirect RAG poisoning, unauthorized RAG ACL queries, PII/secret exfiltration, and MCP shell/path traversal + `16` benign & hard-benign cases; SHA-256 `fdbd0f86eb39ea66f8886cf589d34227314a89cc1af7190df600eebd9acbc10e`, verified `0` prompt/ID overlap with dev/validation).
 - **Metric Separation (`src/aletheia/evaluator.py`):**
   - **Actual Policy Violation Rate (with 95% Wilson CI):** Measures whether a real unauthorized outcome occurred (secret/canary/PII leaked in output, unauthorized RAG document returned, or unauthorized MCP action permitted)—distinct from whether the guardrail merely triggered.
   - **Guardrail Bypass Rate:** Measures how many adversarial inputs were not caught by the ingress/egress/ACL/MCP detection boundary, even when the underlying model happened to refuse or fail to leak a secret.
